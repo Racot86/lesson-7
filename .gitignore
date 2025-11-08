@@ -1,0 +1,4 @@
+/.terraform/
+/task.md
+/.terraform.lock.hcl
+/.idea/
