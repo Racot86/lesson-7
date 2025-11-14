@@ -1,16 +1,14 @@
 variable "bucket_name" {
-  description = "The name of the S3 bucket for Terraform state storage"
+  description = "S3 bucket name for Terraform remote state"
   type        = string
 }
 
-variable "table_name" {
-  description = "The name of the DynamoDB table for state locking"
+variable "dynamodb_table_name" {
+  description = "DynamoDB table name for state locking"
   type        = string
-  default     = "terraform-locks"
 }
 
 variable "region" {
-  description = "The AWS region to deploy resources"
+  description = "AWS region"
   type        = string
-  default     = "us-west-2"
 }

@@ -1,4 +1,6 @@
 /.terraform/
-/task.md
-/.terraform.lock.hcl
+/devOps-lesson-7/
 /.idea/
+/.terraform.lock.hcl
+/terraform.tfstate
+/task.MD
