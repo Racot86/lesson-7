@@ -1,0 +1,8 @@
+configs:
+  cm:
+    timeout.reconciliation: "30s"
+    application.resourceTrackingMethod: annotation
+
+server:
+  service:
+    type: LoadBalancer

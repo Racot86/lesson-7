@@ -29,3 +29,54 @@ module "ecr" {
     Project     = "Lesson-5"
   }
 }
+
+# EKS Module
+module "eks" {
+  source         = "./modules/eks"
+  cluster_name   = "lesson-8-9-eks"
+  subnet_ids     = module.vpc.private_subnet_ids
+  instance_type  = "t3.medium"
+  desired_size   = 2
+  min_size       = 1
+  max_size       = 3
+}
+
+# Fetch EKS connection data only after the cluster is created
+data "aws_eks_cluster" "eks" {
+  name       = module.eks.eks_cluster_name
+  depends_on = [module.eks]
+}
+
+data "aws_eks_cluster_auth" "eks" {
+  name       = module.eks.eks_cluster_name
+  depends_on = [module.eks]
+}
+
+# Jenkins Module (Helm on EKS)
+module "jenkins" {
+  source               = "./modules/jenkins"
+  namespace            = "cicd"
+  eks_cluster_name     = module.eks.eks_cluster_name
+  eks_cluster_endpoint = module.eks.eks_cluster_endpoint
+
+  # Inject EKS auth materials to avoid early data lookups inside the module
+  eks_cluster_ca    = data.aws_eks_cluster.eks.certificate_authority[0].data
+  eks_cluster_token = data.aws_eks_cluster_auth.eks.token
+}
+
+# Argo CD Module (Helm on EKS)
+module "argo_cd" {
+  source               = "./modules/argo_cd"
+  namespace            = "argocd"
+  eks_cluster_name     = module.eks.eks_cluster_name
+  eks_cluster_endpoint = module.eks.eks_cluster_endpoint
+
+  # Inject EKS auth materials to avoid early data lookups inside the module
+  eks_cluster_ca    = data.aws_eks_cluster.eks.certificate_authority[0].data
+  eks_cluster_token = data.aws_eks_cluster_auth.eks.token
+
+  # Point Argo CD to this repo's Helm chart for the app
+  app_repo_url = "https://github.com/misfits3z/lesson-7.git"
+  app_revision = "main"
+  app_path     = "charts/node-app"
+}

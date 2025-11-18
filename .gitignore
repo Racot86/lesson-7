@@ -1,4 +1,5 @@
 /.terraform/
-/task.md
+/task.MD
 /.terraform.lock.hcl
 /.idea/
+/.terraform.tfstate.lock.info

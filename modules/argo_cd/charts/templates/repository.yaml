@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-repo-default
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: argocd-repo-default
+    app.kubernetes.io/part-of: argocd
+data:
+  repoURL: {{ .Values.repoURL | quote }}

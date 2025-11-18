@@ -1,12 +1,23 @@
-# Terraform Infrastructure for AWS
+# Lesson-7: AWS Infra + GitOps CI/CD (Jenkins + Helm + Terraform + Argo CD)
 
 ## Overview
 
-This project provides Terraform configurations to set up a complete AWS infrastructure with:
+This project implements a complete path from infrastructure to GitOps-style application delivery:
 
-* **State Management**: S3 bucket with DynamoDB for secure state storage and locking
-* **Networking**: VPC with public/private subnets across multiple availability zones
-* **Container Registry**: ECR repository for Docker image storage and management
+1) Infrastructure (Terraform)
+   - S3 + DynamoDB for Terraform state backend
+   - VPC with public/private subnets across 3 AZs
+   - ECR repository for application images
+   - EKS cluster (control plane + managed node group)
+
+2) Platform services (Helm via Terraform)
+   - Jenkins installed to the cluster (Helm chart) for CI
+   - Argo CD installed to the cluster (Helm chart) for CD
+
+3) Application delivery
+   - Application packaged as a Helm chart: `charts/node-app`
+   - CI builds app image and pushes to ECR, then updates the Helm `values.yaml` tag
+   - Argo CD watches Git and automatically syncs the application to the cluster
 
 ---
 
@@ -14,27 +25,74 @@ This project provides Terraform configurations to set up a complete AWS infrastr
 
 ```
 .
-├── main.tf                  # Main configuration file
-├── backend.tf               # S3 backend configuration
-├── outputs.tf               # Root module outputs
+├── Jenkinsfile                    # CI pipeline (Kaniko → ECR → update Helm → push)
+├── main.tf                        # Main configuration: wires modules together
+├── backend.tf                     # S3 backend configuration (commented initially)
+├── outputs.tf                     # Root module outputs
 │
-└── modules/                 # Reusable modules
-    ├── s3-backend/          # State management module
-    │   ├── s3.tf            # S3 bucket configuration
-    │   ├── dynamodb.tf      # DynamoDB table configuration
-    │   ├── variables.tf     # Input variables
-    │   └── outputs.tf       # Output values
+├── backend-source/                # Application source built by Jenkins
+│   ├── app/
+│   │   ├── Dockerfile
+│   │   ├── index.js
+│   │   ├── db.js
+│   │   └── package.json
+│   ├── db/
+│   │   └── init.sql
+│   └── nginx/
+│       ├── Dockerfile
+│       └── nginx.conf
+│
+├── charts/
+│   └── node-app/                  # Helm chart for the Node.js application
+│       ├── Chart.yaml
+│       ├── values.yaml            # Holds image repository/tag and app config
+│       └── templates/
+│           ├── deployment.yaml
+│           ├── service.yaml
+│           └── configmap.yaml
+│           # (HPA template can be added if needed)
+│
+└── modules/                       # Reusable modules
+    ├── s3-backend/                # State management (S3 + DynamoDB)
+    │   ├── s3.tf
+    │   ├── dynamodb.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
     │
-    ├── vpc/                 # Network module
-    │   ├── vpc.tf           # VPC and gateway configuration
-    │   ├── routes.tf        # Routing configuration
-    │   ├── variables.tf     # Input variables
-    │   └── outputs.tf       # Output values
+    ├── vpc/                       # Networking (VPC, subnets, routes)
+    │   ├── vpc.tf
+    │   ├── routes.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
     │
-    └── ecr/                 # Container registry module
-        ├── ecr.tf           # ECR repository configuration
-        ├── variables.tf     # Input variables
-        └── outputs.tf       # Output values
+    ├── ecr/                       # Container registry (ECR)
+    │   ├── ecr.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    │
+    ├── eks/                       # Kubernetes control plane and node group
+    │   ├── eks.tf
+    │   ├── node.tf
+    │   ├── variables.tf
+    │   └── outputs.tf
+    │
+    ├── jenkins/                   # Helm release for Jenkins (CI)
+    │   ├── providers.tf
+    │   ├── jenkins.tf
+    │   ├── variables.tf
+    │   └── values.yaml
+    │
+    └── argo_cd/                   # Helm release for Argo CD (CD) + app chart
+        ├── providers.tf
+        ├── argocd.tf
+        ├── variables.tf
+        ├── values.yaml
+        └── charts/
+            ├── Chart.yaml
+            ├── values.yaml
+            └── templates/
+                ├── application.yaml
+                └── repository.yaml
 ```
 
 ---
@@ -67,6 +125,25 @@ Provides Docker image management:
 * Repository access policies
 * Image lifecycle management
 * Optional image scanning on push
+
+### 4. EKS Module
+
+Creates an Amazon EKS cluster and a managed node group:
+
+* EKS control plane IAM role and cluster
+* Managed node group IAM role and policies
+* Node group across provided private subnets
+
+### 5. Jenkins Module
+
+Installs Jenkins via Helm into the cluster (default namespace `cicd`):
+
+* Exposes Jenkins via `LoadBalancer` Service
+* Pre-installs core plugins and JCasC template for a Kaniko agent
+
+### 6. Argo CD Module
+
+Installs Argo CD via Helm (default namespace `argocd`) and deploys an internal chart that defines an `Application` pointing to this repository’s Helm chart (`charts/node-app`). Any change to the chart or its `values.yaml` in Git is reconciled automatically in the cluster.
 
 ---
 
@@ -103,7 +180,7 @@ Follow these steps to properly initialize the infrastructure:
    ```
    * When prompted, type 'yes' to confirm migration
 
-> **Note:** The backend uses `use_lockfile` instead of the deprecated `dynamodb_table` parameter.
+> Note: The backend uses `use_lockfile` for state locking.
 
 ### Common Operations
 
@@ -140,7 +217,36 @@ To push or pull Docker images from the ECR repository:
 3. **Pull an image:**
    ```bash
    docker pull ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com/lesson-5-ecr:tag
-   ```
+
+---
+
+## CI/CD Flow (Jenkins → ECR → Git → Argo CD)
+
+1) Jenkins (root Jenkinsfile) builds and pushes a Docker image to ECR using a Kubernetes agent with Kaniko.
+   - Build context: `backend-source/app` (Dockerfile lives here)
+   - Target ECR repository: `lesson-5-ecr` (from Terraform `modules/ecr`)
+2) Jenkins updates the Helm chart values at `charts/node-app/values.yaml` and commits back to `main`:
+   - On the first run, it replaces `image.repository: REPLACE_ME_ECR_REPOSITORY` with your actual ECR registry/repository (e.g., `<ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/lesson-5-ecr`).
+   - On every run, it updates `image.tag` to the Jenkins build number.
+3) Argo CD, configured to watch this repository path, detects the change and syncs the app to EKS automatically.
+
+### Jenkins: prerequisites and configuration
+
+- Jenkins is installed into the cluster by Terraform/Helm and exposed via a LoadBalancer Service.
+- Default admin credentials are defined in `modules/jenkins/values.yaml` (username `admin`, password `admin123`). Change these for any non-demo use.
+- Create two Jenkins credentials (referenced by the Jenkinsfile):
+  - `aws-creds` (Kind: Username with password) → username=`AWS_ACCESS_KEY_ID`, password=`AWS_SECRET_ACCESS_KEY` with permissions to ECR in `us-west-2`.
+  - `git-creds` (Kind: Username with password or token) → has push rights to this repository’s `main` branch.
+
+### Jenkins pipeline in this repo
+
+The root `Jenkinsfile` already implements the required flow end-to-end:
+- Resolves AWS account/registry dynamically with AWS CLI
+- Builds and pushes the image with Kaniko from `backend-source/app`
+- Updates `charts/node-app/values.yaml` (repository first run only; tag every run)
+- Commits and pushes back to `main`
+
+You can create a Jenkins Pipeline job that uses the Jenkinsfile from SCM (this repository) and run it immediately after configuring credentials.
 
 ---
 

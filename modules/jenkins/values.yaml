@@ -1,0 +1,44 @@
+controller:
+  image:
+    repository: jenkins/jenkins
+    tag: "2.462.3-jdk17"
+    pullPolicy: IfNotPresent
+
+  admin:
+    username: admin
+    password: admin123
+
+  serviceType: LoadBalancer
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  installPlugins:
+    - kubernetes:latest
+    - workflow-aggregator:latest
+    - git:latest
+    - configuration-as-code:latest
+    - credentials-binding:latest
+    - github:latest
+
+  JCasC:
+    configScripts:
+      kaniko-pod: |
+        jenkins:
+          clouds:
+            - kubernetes:
+                name: "kubernetes"
+                templates:
+                  - name: "kaniko"
+                    label: "kaniko"
+                    serviceAccount: "default"
+                    containers:
+                      - name: "kaniko"
+                        image: "gcr.io/kaniko-project/executor:latest"
+                        ttyEnabled: true
+                        command: "/busybox/cat"
+                        args: ""
+                        envVars:
+                          - key: AWS_REGION
+                            value: "us-west-2"

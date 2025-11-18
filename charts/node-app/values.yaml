@@ -1,0 +1,19 @@
+image:
+  repository: REPLACE_ME_ECR_REPOSITORY
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 3000
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+config:
+  NODE_ENV: production
+  PORT: "3000"
