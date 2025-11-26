@@ -1,113 +1,3 @@
-# Lesson-7: AWS Infra + GitOps CI/CD (Jenkins + Helm + Terraform + Argo CD)
-
-## Overview
-
-This project implements a complete path from infrastructure to GitOps-style application delivery:
-
-1) Infrastructure (Terraform)
-   - S3 + DynamoDB for Terraform state backend
-   - VPC with public/private subnets across 3 AZs
-   - ECR repository for application images
-   - EKS cluster (control plane + managed node group)
-
-2) Platform services (Helm via Terraform)
-   - Jenkins installed to the cluster (Helm chart) for CI
-   - Argo CD installed to the cluster (Helm chart) for CD
-
-3) Application delivery
-   - Application packaged as a Helm chart: `charts/node-app`
-   - CI builds app image and pushes to ECR, then updates the Helm `values.yaml` tag
-   - Argo CD watches Git and automatically syncs the application to the cluster
-
----
-
-## Project Structure
-
-```
-.
-├── Jenkinsfile                    # CI pipeline (Kaniko → ECR → update Helm → push)
-├── main.tf                        # Main configuration: wires modules together
-├── backend.tf                     # S3 backend configuration (commented initially)
-├── outputs.tf                     # Root module outputs
-│
-├── backend-source/                # Application source built by Jenkins
-│   ├── app/
-│   │   ├── Dockerfile
-│   │   ├── index.js
-│   │   ├── db.js
-│   │   └── package.json
-│   ├── db/
-│   │   └── init.sql
-│   └── nginx/
-│       ├── Dockerfile
-│       └── nginx.conf
-│
-├── charts/
-│   └── node-app/                  # Helm chart for the Node.js application
-│       ├── Chart.yaml
-│       ├── values.yaml            # Holds image repository/tag and app config
-│       └── templates/
-│           ├── deployment.yaml
-│           ├── service.yaml
-│           └── configmap.yaml
-│           # (HPA template can be added if needed)
-│
-└── modules/                       # Reusable modules
-    ├── s3-backend/                # State management (S3 + DynamoDB)
-    │   ├── s3.tf
-    │   ├── dynamodb.tf
-    │   ├── variables.tf
-    │   └── outputs.tf
-    │
-    ├── vpc/                       # Networking (VPC, subnets, routes)
-    │   ├── vpc.tf
-    │   ├── routes.tf
-    │   ├── variables.tf
-    │   └── outputs.tf
-    │
-    ├── ecr/                       # Container registry (ECR)
-    │   ├── ecr.tf
-    │   ├── variables.tf
-    │   └── outputs.tf
-    │
-    ├── eks/                       # Kubernetes control plane and node group
-    │   ├── eks.tf
-    │   ├── node.tf
-    │   ├── variables.tf
-    │   └── outputs.tf
-    │
-    ├── jenkins/                   # Helm release for Jenkins (CI)
-    │   ├── providers.tf
-    │   ├── jenkins.tf
-    │   ├── variables.tf
-    │   └── values.yaml
-    │
-    └── argo_cd/                   # Helm release for Argo CD (CD) + app chart
-        ├── providers.tf
-        ├── argocd.tf
-        ├── variables.tf
-        ├── values.yaml
-        └── charts/
-            ├── Chart.yaml
-            ├── values.yaml
-            └── templates/
-                ├── application.yaml
-                └── repository.yaml
-```
-
----
-
-## Module Descriptions
-
-### 1. S3 Backend Module
-
-Creates infrastructure for secure Terraform state management:
-
-* S3 bucket with versioning and encryption
-* DynamoDB table for state locking
-* Public access blocking for enhanced security
-
-### 2. VPC Module
 
 Establishes a complete network infrastructure:
 
@@ -258,3 +148,86 @@ You can create a Jenkins Pipeline job that uses the Jenkinsfile from SCM (this r
 * NAT Gateways incur significant costs - consider disabling for development environments
 * ECR authentication tokens are valid for 12 hours
 * Proper IAM permissions are required to interact with the created resources
+
+### 7. RDS Module (Aurora or Standalone)
+
+Production-ready, reusable Terraform module that can provision either:
+- a single RDS instance (PostgreSQL/MySQL), or
+- an Aurora cluster (PostgreSQL/MySQL-compatible),
+based on the boolean flag `use_aurora`.
+
+What it creates in both modes:
+- DB Subnet Group (uses provided private subnet IDs)
+- Security Group with allowed CIDR rules on the DB port
+- Parameter Group(s) with basic parameters (max_connections, log_statement, work_mem)
+
+Key variables:
+- name: base name used for identifiers and tags
+- use_aurora: true to create Aurora cluster, false for single instance (default false)
+- engine: e.g. "postgres", "aurora-postgresql", "mysql", "aurora-mysql"
+- engine_version: version string, e.g. "14.7"
+- instance_class: e.g. "db.t3.medium"
+- parameter_group_family: e.g. "postgres14" or "aurora-postgresql14"
+- vpc_id, subnet_ids: to place DB in private subnets and attach SG
+- db_name, username, password, port
+- allowed_cidr_blocks: list of CIDRs allowed to access DB on port
+- aurora_instance_count: number of cluster instances (writer + readers), default 1
+
+Outputs:
+- db_subnet_group_name, security_group_id, endpoint, reader_endpoint (Aurora only), port
+
+Example usage for a Node.js app with PostgreSQL (standalone RDS):
+
+```
+module "rds" {
+  source = "./modules/rds"
+
+  name                    = "lesson7-db"
+  use_aurora              = false
+  engine                  = "postgres"
+  engine_version          = "14.7"
+  instance_class          = "db.t3.micro"
+  parameter_group_family  = "postgres14"
+
+  vpc_id      = module.vpc.vpc_id
+  subnet_ids  = module.vpc.private_subnet_ids
+  port        = 5432
+
+  db_name   = var.db_name
+  username  = var.db_username
+  password  = var.db_password
+
+  allowed_cidr_blocks = ["10.0.0.0/16"]
+
+  tags = {
+    Environment = "dev"
+    Project     = "lesson-7"
+  }
+}
+```
+
+Aurora PostgreSQL variant:
+
+```
+module "rds" {
+  source = "./modules/rds"
+
+  name                    = "lesson7-aurora"
+  use_aurora              = true
+  engine                  = "aurora-postgresql"
+  engine_version          = "14.6"
+  instance_class          = "db.r6g.large"
+  parameter_group_family  = "aurora-postgresql14"
+  aurora_instance_count   = 2  # 1 writer + 1 reader
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
+  port       = 5432
+
+  db_name   = var.db_name
+  username  = var.db_username
+  password  = var.db_password
+}
+```
+
+Tip for the Node app: wire the DB connection string via Helm values and a Kubernetes Secret, using the `module.rds.endpoint` output together with `module.rds.port`.
